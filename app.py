@@ -2,21 +2,21 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List
+from google import genai
 import os
 import json
-from google import genai
 
-# ----------------------------
-# OpenAI Client
-# ----------------------------
+# -----------------------------
+# Gemini Client
+# -----------------------------
 
 client = genai.Client(
     api_key=os.getenv("GEMINI_API_KEY")
 )
 
-# ----------------------------
+# -----------------------------
 # FastAPI App
-# ----------------------------
+# -----------------------------
 
 app = FastAPI(title="Grounded QA API")
 
@@ -28,9 +28,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ----------------------------
-# Request Models
-# ----------------------------
+# -----------------------------
+# Models
+# -----------------------------
 
 class Chunk(BaseModel):
     chunk_id: str
@@ -40,9 +40,9 @@ class QARequest(BaseModel):
     question: str
     chunks: List[Chunk]
 
-# ----------------------------
+# -----------------------------
 # Prompt Builder
-# ----------------------------
+# -----------------------------
 
 def build_prompt(question, chunks):
 
@@ -52,33 +52,32 @@ def build_prompt(question, chunks):
         context += f"[{chunk.chunk_id}]\n{chunk.text}\n\n"
 
     prompt = f"""
-You are a Grounded Question Answering system.
+You are an expert Grounded Question Answering assistant.
 
 STRICT RULES:
 
-1. Answer ONLY using the context.
-2. Never use outside knowledge.
-3. If the answer is not fully supported by the context, return:
+1. Use ONLY the provided context.
+2. NEVER use outside knowledge.
+3. NEVER guess.
+4. NEVER infer missing facts.
+5. Cite ONLY chunk IDs provided.
+6. If answer cannot be fully answered from context, return EXACTLY:
 
 {{
-"answer":"I don't know",
-"citations":[],
-"confidence":0.2,
-"answerable":false
+  "answer":"I don't know",
+  "citations":[],
+  "confidence":0.2,
+  "answerable":false
 }}
 
-4. If answer exists, return ONLY JSON:
+If answer exists return ONLY JSON like:
 
 {{
-"answer":"...",
-"citations":["C1"],
-"confidence":0.95,
-"answerable":true
+  "answer":"...",
+  "citations":["C1"],
+  "confidence":0.95,
+  "answerable":true
 }}
-
-5. Citation IDs MUST exactly match IDs from the context.
-
-6. Never invent citations.
 
 Context:
 
@@ -87,18 +86,18 @@ Context:
 Question:
 
 {question}
+
+Return ONLY JSON.
 """
 
     return prompt
 
-# ----------------------------
-# Endpoint
-# ----------------------------
+# -----------------------------
+# API
+# -----------------------------
 
 @app.post("/grounded-answer")
 def grounded_answer(request: QARequest):
-
-    # Empty input handling
 
     if request.question.strip() == "" or len(request.chunks) == 0:
 
@@ -113,26 +112,17 @@ def grounded_answer(request: QARequest):
 
     try:
 
-        response = client.chat.completions.create(
-
-            model="gpt-4.1-mini",
-
-            messages=[
-                {
-                    "role": "system",
-                    "content": "Return JSON only."
-                },
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
-
-            temperature=0
-
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt
         )
 
-        output = response.choices[0].message.content
+        output = response.text.strip()
+
+        if output.startswith("```"):
+            output = output.replace("```json", "")
+            output = output.replace("```", "")
+            output = output.strip()
 
         result = json.loads(output)
 
@@ -145,15 +135,13 @@ def grounded_answer(request: QARequest):
             "answerable": False
         }
 
-    # ----------------------------
+    # -----------------------------
     # Validation
-    # ----------------------------
+    # -----------------------------
 
     valid_ids = {chunk.chunk_id for chunk in request.chunks}
 
     citations = result.get("citations", [])
-
-    # Invalid citation IDs
 
     for cid in citations:
         if cid not in valid_ids:
@@ -164,7 +152,12 @@ def grounded_answer(request: QARequest):
                 "answerable": False
             }
 
-    confidence = float(result.get("confidence", 0))
+    confidence = result.get("confidence", 0.2)
+
+    try:
+        confidence = float(confidence)
+    except:
+        confidence = 0.2
 
     confidence = max(0.0, min(1.0, confidence))
 
@@ -181,6 +174,15 @@ def grounded_answer(request: QARequest):
             "answerable": False
         }
 
+    if len(citations) == 0:
+
+        return {
+            "answer": "I don't know",
+            "citations": [],
+            "confidence": 0.2,
+            "answerable": False
+        }
+
     return {
         "answer": answer,
         "citations": citations,
@@ -188,12 +190,13 @@ def grounded_answer(request: QARequest):
         "answerable": True
     }
 
-# ----------------------------
-# Health Check
-# ----------------------------
+# -----------------------------
+# Home
+# -----------------------------
 
 @app.get("/")
 def home():
     return {
-        "message": "Grounded QA API is running."
+        "status": "running",
+        "message": "Grounded QA API"
     }
