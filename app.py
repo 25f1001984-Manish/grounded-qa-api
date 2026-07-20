@@ -2,16 +2,16 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List
-from openai import OpenAI
 import os
 import json
+from google import genai
 
 # ----------------------------
 # OpenAI Client
 # ----------------------------
 
-client = OpenAI(
-    api_key=os.getenv("OPENAI_API_KEY")
+client = genai.Client(
+    api_key=os.getenv("GEMINI_API_KEY")
 )
 
 # ----------------------------
